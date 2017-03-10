@@ -1,0 +1,12 @@
+# This file is auto-generated during the composer install
+parameters:
+    database_host: 127.0.0.1
+    database_port: null
+    database_name: teste_sonatadois
+    database_user: root
+    database_password: 153957
+    mailer_transport: smtp
+    mailer_host: 127.0.0.1
+    mailer_user: null
+    mailer_password: null
+    secret: 61b09a5152d2dbd7616f1dea8bdcda31484fa19e
