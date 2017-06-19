@@ -22,7 +22,10 @@ class BlogPostAdmin extends AbstractAdmin
             ->add('title')
             ->add('body')
             ->add('draft')
-            ->add('category')
+            ->add('category', 'sonata_type_model', array(
+                'class' => 'AppBundle\Entity\Category',
+                'property' => 'name',
+            ))
         ;
     }
 

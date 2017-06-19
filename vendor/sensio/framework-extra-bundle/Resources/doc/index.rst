@@ -1,7 +1,7 @@
 SensioFrameworkExtraBundle
 ==========================
 
-The default Symfony ``FrameworkBundle`` implements a basic but robust and
+The default Symfony2 ``FrameworkBundle`` implements a basic but robust and
 flexible MVC framework. `SensioFrameworkExtraBundle`_ extends it to add sweet
 conventions and annotations. It allows for more concise controllers.
 
@@ -99,7 +99,7 @@ Annotations are a great way to easily configure your controllers, from the
 routes to the cache configuration.
 
 Even if annotations are not a native feature of PHP, it still has several
-advantages over the classic Symfony configuration methods:
+advantages over the classic Symfony2 configuration methods:
 
 * Code and configuration are in the same place (the controller class);
 * Simple to learn and to use;
@@ -136,7 +136,7 @@ This example shows all the available annotations in action::
      * @Route("/blog")
      * @Cache(expires="tomorrow")
      */
-    class AnnotController
+    class AnnotController extends Controller
     {
         /**
          * @Route("/")
@@ -207,9 +207,10 @@ snippet::
     namespace AppBundle\Controller;
 
     use Psr\Http\Message\ServerRequestInterface;
+    use Symfony\Bundle\FrameworkBundle\Controller\Controller;
     use Zend\Diactoros\Response;
 
-    class DefaultController
+    class DefaultController extends Controller
     {
         public function indexAction(ServerRequestInterface $request)
         {

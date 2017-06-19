@@ -210,7 +210,7 @@ return $this->started;
 }
 public function setOptions(array $options)
 {
-$validOptions = array_flip(array('cache_limiter','cookie_domain','cookie_httponly','cookie_lifetime','cookie_path','cookie_secure','entropy_file','entropy_length','gc_divisor','gc_maxlifetime','gc_probability','hash_bits_per_character','hash_function','name','referer_check','serialize_handler','use_cookies','use_only_cookies','use_trans_sid','upload_progress.enabled','upload_progress.cleanup','upload_progress.prefix','upload_progress.name','upload_progress.freq','upload_progress.min-freq','url_rewriter.tags',
+$validOptions = array_flip(array('cache_limiter','cookie_domain','cookie_httponly','cookie_lifetime','cookie_path','cookie_secure','entropy_file','entropy_length','gc_divisor','gc_maxlifetime','gc_probability','hash_bits_per_character','hash_function','name','referer_check','serialize_handler','use_strict_mode','use_cookies','use_only_cookies','use_trans_sid','upload_progress.enabled','upload_progress.cleanup','upload_progress.prefix','upload_progress.name','upload_progress.freq','upload_progress.min-freq','url_rewriter.tags',
 ));
 foreach ($options as $key => $value) {
 if (isset($validOptions[$key])) {
@@ -1810,7 +1810,7 @@ return $priority;
 }
 public function hasListeners($eventName = null)
 {
-return (bool) count($this->getListeners($eventName));
+return (bool) $this->getListeners($eventName);
 }
 public function addListener($eventName, $listener, $priority = 0)
 {
@@ -2574,6 +2574,36 @@ return $controller;
 }
 namespace Symfony\Component\Security\Http
 {
+use Symfony\Component\HttpFoundation\Request;
+interface AccessMapInterface
+{
+public function getPatterns(Request $request);
+}
+}
+namespace Symfony\Component\Security\Http
+{
+use Symfony\Component\HttpFoundation\RequestMatcherInterface;
+use Symfony\Component\HttpFoundation\Request;
+class AccessMap implements AccessMapInterface
+{
+private $map = array();
+public function add(RequestMatcherInterface $requestMatcher, array $attributes = array(), $channel = null)
+{
+$this->map[] = array($requestMatcher, $attributes, $channel);
+}
+public function getPatterns(Request $request)
+{
+foreach ($this->map as $elements) {
+if (null === $elements[0] || $elements[0]->matches($request)) {
+return array($elements[1], $elements[2]);
+}
+}
+return array(null, null);
+}
+}
+}
+namespace Symfony\Component\Security\Http
+{
 use Symfony\Component\HttpKernel\KernelEvents;
 use Symfony\Component\HttpKernel\Event\GetResponseEvent;
 use Symfony\Component\HttpKernel\Event\FinishRequestEvent;
@@ -3064,11 +3094,11 @@ namespace
 {
 class Twig_Environment
 {
-const VERSION ='1.32.0';
-const VERSION_ID = 13200;
+const VERSION ='1.33.2';
+const VERSION_ID = 13302;
 const MAJOR_VERSION = 1;
-const MINOR_VERSION = 32;
-const RELEASE_VERSION = 0;
+const MINOR_VERSION = 33;
+const RELEASE_VERSION = 1;
 const EXTRA_VERSION ='';
 protected $charset;
 protected $loader;
@@ -4569,7 +4599,11 @@ if (!isset($char[1])) {
 return'\\x'.strtoupper(substr('00'.bin2hex($char), -2));
 }
 $char = twig_convert_encoding($char,'UTF-16BE','UTF-8');
-return'\\u'.strtoupper(substr('0000'.bin2hex($char), -4));
+$char = strtoupper(bin2hex($char));
+if (4 >= strlen($char)) {
+return sprintf('\u%04s', $char);
+}
+return sprintf('\u%04s\u%04s', substr($char, 0, -4), substr($char, -4));
 }
 function _twig_escape_css_callback($matches)
 {
@@ -4612,7 +4646,13 @@ return sprintf('&#x%s;', $hex);
 if (function_exists('mb_get_info')) {
 function twig_length_filter(Twig_Environment $env, $thing)
 {
-return is_scalar($thing) ? mb_strlen($thing, $env->getCharset()) : count($thing);
+if (is_scalar($thing)) {
+return mb_strlen($thing, $env->getCharset());
+}
+if (is_object($thing) && method_exists($thing,'__toString') && !$thing instanceof \Countable) {
+return mb_strlen((string) $thing, $env->getCharset());
+}
+return count($thing);
 }
 function twig_upper_filter(Twig_Environment $env, $string)
 {
@@ -4646,7 +4686,13 @@ return ucfirst(strtolower($string));
 else {
 function twig_length_filter(Twig_Environment $env, $thing)
 {
-return is_scalar($thing) ? strlen($thing) : count($thing);
+if (is_scalar($thing)) {
+return strlen($thing);
+}
+if (is_object($thing) && method_exists($thing,'__toString') && !$thing instanceof \Countable) {
+return strlen((string) $thing);
+}
+return count($thing);
 }
 function twig_title_string_filter(Twig_Environment $env, $string)
 {
@@ -4668,6 +4714,9 @@ function twig_test_empty($value)
 {
 if ($value instanceof Countable) {
 return 0 == count($value);
+}
+if (is_object($value) && method_exists($value,'__toString')) {
+return''=== (string) $value;
 }
 return''=== $value || false === $value || null === $value || array() === $value;
 }
@@ -5212,11 +5261,13 @@ $lcName = substr($lcName, 2);
 } else {
 continue;
 }
+if ($name) {
 if (!isset($cache[$name])) {
 $cache[$name] = $method;
 }
 if (!isset($cache[$lcName])) {
 $cache[$lcName] = $method;
+}
 }
 }
 self::$cache[$class] = $cache;
@@ -5951,6 +6002,720 @@ return $this->getManagerForClass($class);
 }
 }
 }
+namespace Sensio\Bundle\FrameworkExtraBundle\EventListener
+{
+use Doctrine\Common\Annotations\Reader;
+use Symfony\Component\HttpKernel\Event\FilterControllerEvent;
+use Symfony\Component\HttpKernel\KernelEvents;
+use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+use Sensio\Bundle\FrameworkExtraBundle\Configuration\ConfigurationInterface;
+use Doctrine\Common\Util\ClassUtils;
+class ControllerListener implements EventSubscriberInterface
+{
+protected $reader;
+public function __construct(Reader $reader)
+{
+$this->reader = $reader;
+}
+public function onKernelController(FilterControllerEvent $event)
+{
+if (!is_array($controller = $event->getController())) {
+return;
+}
+$className = class_exists('Doctrine\Common\Util\ClassUtils') ? ClassUtils::getClass($controller[0]) : get_class($controller[0]);
+$object = new \ReflectionClass($className);
+$method = $object->getMethod($controller[1]);
+$classConfigurations = $this->getConfigurations($this->reader->getClassAnnotations($object));
+$methodConfigurations = $this->getConfigurations($this->reader->getMethodAnnotations($method));
+$configurations = array();
+foreach (array_merge(array_keys($classConfigurations), array_keys($methodConfigurations)) as $key) {
+if (!array_key_exists($key, $classConfigurations)) {
+$configurations[$key] = $methodConfigurations[$key];
+} elseif (!array_key_exists($key, $methodConfigurations)) {
+$configurations[$key] = $classConfigurations[$key];
+} else {
+if (is_array($classConfigurations[$key])) {
+if (!is_array($methodConfigurations[$key])) {
+throw new \UnexpectedValueException('Configurations should both be an array or both not be an array');
+}
+$configurations[$key] = array_merge($classConfigurations[$key], $methodConfigurations[$key]);
+} else {
+$configurations[$key] = $methodConfigurations[$key];
+}
+}
+}
+$request = $event->getRequest();
+foreach ($configurations as $key => $attributes) {
+$request->attributes->set($key, $attributes);
+}
+}
+protected function getConfigurations(array $annotations)
+{
+$configurations = array();
+foreach ($annotations as $configuration) {
+if ($configuration instanceof ConfigurationInterface) {
+if ($configuration->allowArray()) {
+$configurations['_'.$configuration->getAliasName()][] = $configuration;
+} elseif (!isset($configurations['_'.$configuration->getAliasName()])) {
+$configurations['_'.$configuration->getAliasName()] = $configuration;
+} else {
+throw new \LogicException(sprintf('Multiple "%s" annotations are not allowed.', $configuration->getAliasName()));
+}
+}
+}
+return $configurations;
+}
+public static function getSubscribedEvents()
+{
+return array(
+KernelEvents::CONTROLLER =>'onKernelController',
+);
+}
+}
+}
+namespace Sensio\Bundle\FrameworkExtraBundle\EventListener
+{
+use Sensio\Bundle\FrameworkExtraBundle\Configuration\ParamConverter;
+use Sensio\Bundle\FrameworkExtraBundle\Request\ParamConverter\ParamConverterManager;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpKernel\Event\FilterControllerEvent;
+use Symfony\Component\HttpKernel\KernelEvents;
+use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+class ParamConverterListener implements EventSubscriberInterface
+{
+protected $manager;
+protected $autoConvert;
+public function __construct(ParamConverterManager $manager, $autoConvert = true)
+{
+$this->manager = $manager;
+$this->autoConvert = $autoConvert;
+}
+public function onKernelController(FilterControllerEvent $event)
+{
+$controller = $event->getController();
+$request = $event->getRequest();
+$configurations = array();
+if ($configuration = $request->attributes->get('_converters')) {
+foreach (is_array($configuration) ? $configuration : array($configuration) as $configuration) {
+$configurations[$configuration->getName()] = $configuration;
+}
+}
+if (is_array($controller)) {
+$r = new \ReflectionMethod($controller[0], $controller[1]);
+} elseif (is_object($controller) && is_callable($controller,'__invoke')) {
+$r = new \ReflectionMethod($controller,'__invoke');
+} else {
+$r = new \ReflectionFunction($controller);
+}
+if ($this->autoConvert) {
+$configurations = $this->autoConfigure($r, $request, $configurations);
+}
+$this->manager->apply($request, $configurations);
+}
+private function autoConfigure(\ReflectionFunctionAbstract $r, Request $request, $configurations)
+{
+foreach ($r->getParameters() as $param) {
+if (!$param->getClass() || $param->getClass()->isInstance($request)) {
+continue;
+}
+$name = $param->getName();
+if (!isset($configurations[$name])) {
+$configuration = new ParamConverter(array());
+$configuration->setName($name);
+$configuration->setClass($param->getClass()->getName());
+$configurations[$name] = $configuration;
+} elseif (null === $configurations[$name]->getClass()) {
+$configurations[$name]->setClass($param->getClass()->getName());
+}
+$configurations[$name]->setIsOptional($param->isOptional());
+}
+return $configurations;
+}
+public static function getSubscribedEvents()
+{
+return array(
+KernelEvents::CONTROLLER =>'onKernelController',
+);
+}
+}
+}
+namespace Sensio\Bundle\FrameworkExtraBundle\Request\ParamConverter
+{
+use Sensio\Bundle\FrameworkExtraBundle\Configuration\ParamConverter;
+use Symfony\Component\HttpFoundation\Request;
+interface ParamConverterInterface
+{
+public function apply(Request $request, ParamConverter $configuration);
+public function supports(ParamConverter $configuration);
+}
+}
+namespace Sensio\Bundle\FrameworkExtraBundle\Request\ParamConverter
+{
+use Sensio\Bundle\FrameworkExtraBundle\Configuration\ParamConverter;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+use DateTime;
+class DateTimeParamConverter implements ParamConverterInterface
+{
+public function apply(Request $request, ParamConverter $configuration)
+{
+$param = $configuration->getName();
+if (!$request->attributes->has($param)) {
+return false;
+}
+$options = $configuration->getOptions();
+$value = $request->attributes->get($param);
+if (!$value && $configuration->isOptional()) {
+return false;
+}
+if (isset($options['format'])) {
+$date = DateTime::createFromFormat($options['format'], $value);
+if (!$date) {
+throw new NotFoundHttpException('Invalid date given.');
+}
+} else {
+if (false === strtotime($value)) {
+throw new NotFoundHttpException('Invalid date given.');
+}
+$date = new DateTime($value);
+}
+$request->attributes->set($param, $date);
+return true;
+}
+public function supports(ParamConverter $configuration)
+{
+if (null === $configuration->getClass()) {
+return false;
+}
+return'DateTime'=== $configuration->getClass();
+}
+}
+}
+namespace Sensio\Bundle\FrameworkExtraBundle\Request\ParamConverter
+{
+use Sensio\Bundle\FrameworkExtraBundle\Configuration\ParamConverter;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+use Symfony\Component\HttpFoundation\Request;
+use Doctrine\Common\Persistence\ManagerRegistry;
+use Doctrine\ORM\NoResultException;
+class DoctrineParamConverter implements ParamConverterInterface
+{
+protected $registry;
+public function __construct(ManagerRegistry $registry = null)
+{
+$this->registry = $registry;
+}
+public function apply(Request $request, ParamConverter $configuration)
+{
+$name = $configuration->getName();
+$class = $configuration->getClass();
+$options = $this->getOptions($configuration);
+if (null === $request->attributes->get($name, false)) {
+$configuration->setIsOptional(true);
+}
+if (false === $object = $this->find($class, $request, $options, $name)) {
+if (false === $object = $this->findOneBy($class, $request, $options)) {
+if ($configuration->isOptional()) {
+$object = null;
+} else {
+throw new \LogicException('Unable to guess how to get a Doctrine instance from the request information.');
+}
+}
+}
+if (null === $object && false === $configuration->isOptional()) {
+throw new NotFoundHttpException(sprintf('%s object not found.', $class));
+}
+$request->attributes->set($name, $object);
+return true;
+}
+protected function find($class, Request $request, $options, $name)
+{
+if ($options['mapping'] || $options['exclude']) {
+return false;
+}
+$id = $this->getIdentifier($request, $options, $name);
+if (false === $id || null === $id) {
+return false;
+}
+if (isset($options['repository_method'])) {
+$method = $options['repository_method'];
+} else {
+$method ='find';
+}
+try {
+return $this->getManager($options['entity_manager'], $class)->getRepository($class)->$method($id);
+} catch (NoResultException $e) {
+return;
+}
+}
+protected function getIdentifier(Request $request, $options, $name)
+{
+if (isset($options['id'])) {
+if (!is_array($options['id'])) {
+$name = $options['id'];
+} elseif (is_array($options['id'])) {
+$id = array();
+foreach ($options['id'] as $field) {
+$id[$field] = $request->attributes->get($field);
+}
+return $id;
+}
+}
+if ($request->attributes->has($name)) {
+return $request->attributes->get($name);
+}
+if ($request->attributes->has('id') && !isset($options['id'])) {
+return $request->attributes->get('id');
+}
+return false;
+}
+protected function findOneBy($class, Request $request, $options)
+{
+if (!$options['mapping']) {
+$keys = $request->attributes->keys();
+$options['mapping'] = $keys ? array_combine($keys, $keys) : array();
+}
+foreach ($options['exclude'] as $exclude) {
+unset($options['mapping'][$exclude]);
+}
+if (!$options['mapping']) {
+return false;
+}
+if (isset($options['id']) && null === $request->attributes->get($options['id'])) {
+return false;
+}
+$criteria = array();
+$em = $this->getManager($options['entity_manager'], $class);
+$metadata = $em->getClassMetadata($class);
+$mapMethodSignature = isset($options['repository_method'])
+&& isset($options['map_method_signature'])
+&& $options['map_method_signature'] === true;
+foreach ($options['mapping'] as $attribute => $field) {
+if ($metadata->hasField($field)
+|| ($metadata->hasAssociation($field) && $metadata->isSingleValuedAssociation($field))
+|| $mapMethodSignature) {
+$criteria[$field] = $request->attributes->get($attribute);
+}
+}
+if ($options['strip_null']) {
+$criteria = array_filter($criteria, function ($value) { return !is_null($value); });
+}
+if (!$criteria) {
+return false;
+}
+if (isset($options['repository_method'])) {
+$repositoryMethod = $options['repository_method'];
+} else {
+$repositoryMethod ='findOneBy';
+}
+try {
+if ($mapMethodSignature) {
+return $this->findDataByMapMethodSignature($em, $class, $repositoryMethod, $criteria);
+}
+return $em->getRepository($class)->$repositoryMethod($criteria);
+} catch (NoResultException $e) {
+return;
+}
+}
+private function findDataByMapMethodSignature($em, $class, $repositoryMethod, $criteria)
+{
+$arguments = array();
+$repository = $em->getRepository($class);
+$ref = new \ReflectionMethod($repository, $repositoryMethod);
+foreach ($ref->getParameters() as $parameter) {
+if (array_key_exists($parameter->name, $criteria)) {
+$arguments[] = $criteria[$parameter->name];
+} elseif ($parameter->isDefaultValueAvailable()) {
+$arguments[] = $parameter->getDefaultValue();
+} else {
+throw new \InvalidArgumentException(sprintf('Repository method "%s::%s" requires that you provide a value for the "$%s" argument.', get_class($repository), $repositoryMethod, $parameter->name));
+}
+}
+return $ref->invokeArgs($repository, $arguments);
+}
+public function supports(ParamConverter $configuration)
+{
+if (null === $this->registry || !count($this->registry->getManagers())) {
+return false;
+}
+if (null === $configuration->getClass()) {
+return false;
+}
+$options = $this->getOptions($configuration);
+$em = $this->getManager($options['entity_manager'], $configuration->getClass());
+if (null === $em) {
+return false;
+}
+return !$em->getMetadataFactory()->isTransient($configuration->getClass());
+}
+protected function getOptions(ParamConverter $configuration)
+{
+return array_replace(array('entity_manager'=> null,'exclude'=> array(),'mapping'=> array(),'strip_null'=> false,
+), $configuration->getOptions());
+}
+private function getManager($name, $class)
+{
+if (null === $name) {
+return $this->registry->getManagerForClass($class);
+}
+return $this->registry->getManager($name);
+}
+}
+}
+namespace Sensio\Bundle\FrameworkExtraBundle\Request\ParamConverter
+{
+use Symfony\Component\HttpFoundation\Request;
+use Sensio\Bundle\FrameworkExtraBundle\Configuration\ConfigurationInterface;
+class ParamConverterManager
+{
+protected $converters = array();
+protected $namedConverters = array();
+public function apply(Request $request, $configurations)
+{
+if (is_object($configurations)) {
+$configurations = array($configurations);
+}
+foreach ($configurations as $configuration) {
+$this->applyConverter($request, $configuration);
+}
+}
+protected function applyConverter(Request $request, ConfigurationInterface $configuration)
+{
+$value = $request->attributes->get($configuration->getName());
+$className = $configuration->getClass();
+if (is_object($value) && $value instanceof $className) {
+return;
+}
+if ($converterName = $configuration->getConverter()) {
+if (!isset($this->namedConverters[$converterName])) {
+throw new \RuntimeException(sprintf("No converter named '%s' found for conversion of parameter '%s'.",
+$converterName, $configuration->getName()
+));
+}
+$converter = $this->namedConverters[$converterName];
+if (!$converter->supports($configuration)) {
+throw new \RuntimeException(sprintf("Converter '%s' does not support conversion of parameter '%s'.",
+$converterName, $configuration->getName()
+));
+}
+$converter->apply($request, $configuration);
+return;
+}
+foreach ($this->all() as $converter) {
+if ($converter->supports($configuration)) {
+if ($converter->apply($request, $configuration)) {
+return;
+}
+}
+}
+}
+public function add(ParamConverterInterface $converter, $priority = 0, $name = null)
+{
+if ($priority !== null) {
+if (!isset($this->converters[$priority])) {
+$this->converters[$priority] = array();
+}
+$this->converters[$priority][] = $converter;
+}
+if (null !== $name) {
+$this->namedConverters[$name] = $converter;
+}
+}
+public function all()
+{
+krsort($this->converters);
+$converters = array();
+foreach ($this->converters as $all) {
+$converters = array_merge($converters, $all);
+}
+return $converters;
+}
+}
+}
+namespace Sensio\Bundle\FrameworkExtraBundle\EventListener
+{
+use Symfony\Component\DependencyInjection\ContainerInterface;
+use Symfony\Component\HttpKernel\Event\FilterControllerEvent;
+use Symfony\Component\HttpKernel\Event\GetResponseForControllerResultEvent;
+use Symfony\Component\HttpKernel\KernelEvents;
+use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+use Sensio\Bundle\FrameworkExtraBundle\Configuration\Template;
+class TemplateListener implements EventSubscriberInterface
+{
+protected $container;
+public function __construct(ContainerInterface $container)
+{
+$this->container = $container;
+}
+public function onKernelController(FilterControllerEvent $event)
+{
+if (!is_array($controller = $event->getController())) {
+return;
+}
+$request = $event->getRequest();
+if (!$configuration = $request->attributes->get('_template')) {
+return;
+}
+if (!$configuration->getTemplate()) {
+$guesser = $this->container->get('sensio_framework_extra.view.guesser');
+$configuration->setTemplate($guesser->guessTemplateName($controller, $request, $configuration->getEngine()));
+}
+$request->attributes->set('_template', $configuration->getTemplate());
+$request->attributes->set('_template_vars', $configuration->getVars());
+$request->attributes->set('_template_streamable', $configuration->isStreamable());
+if (!$configuration->getVars()) {
+$r = new \ReflectionObject($controller[0]);
+$vars = array();
+foreach ($r->getMethod($controller[1])->getParameters() as $param) {
+$vars[] = $param->getName();
+}
+$request->attributes->set('_template_default_vars', $vars);
+}
+}
+public function onKernelView(GetResponseForControllerResultEvent $event)
+{
+$request = $event->getRequest();
+$parameters = $event->getControllerResult();
+if (null === $parameters) {
+if (!$vars = $request->attributes->get('_template_vars')) {
+if (!$vars = $request->attributes->get('_template_default_vars')) {
+return;
+}
+}
+$parameters = array();
+foreach ($vars as $var) {
+$parameters[$var] = $request->attributes->get($var);
+}
+}
+if (!is_array($parameters)) {
+return $parameters;
+}
+if (!$template = $request->attributes->get('_template')) {
+return $parameters;
+}
+$templating = $this->container->get('templating');
+if (!$request->attributes->get('_template_streamable')) {
+$event->setResponse($templating->renderResponse($template, $parameters));
+} else {
+$callback = function () use ($templating, $template, $parameters) {
+return $templating->stream($template, $parameters);
+};
+$event->setResponse(new StreamedResponse($callback));
+}
+}
+public static function getSubscribedEvents()
+{
+return array(
+KernelEvents::CONTROLLER => array('onKernelController', -128),
+KernelEvents::VIEW =>'onKernelView',
+);
+}
+}
+}
+namespace Sensio\Bundle\FrameworkExtraBundle\EventListener
+{
+use Symfony\Component\HttpKernel\Event\FilterControllerEvent;
+use Symfony\Component\HttpKernel\Event\FilterResponseEvent;
+use Symfony\Component\HttpKernel\KernelEvents;
+use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+use Symfony\Component\ExpressionLanguage\ExpressionLanguage;
+use Sensio\Bundle\FrameworkExtraBundle\Configuration\Cache;
+class HttpCacheListener implements EventSubscriberInterface
+{
+private $lastModifiedDates;
+private $etags;
+private $expressionLanguage;
+public function __construct()
+{
+$this->lastModifiedDates = new \SplObjectStorage();
+$this->etags = new \SplObjectStorage();
+}
+public function onKernelController(FilterControllerEvent $event)
+{
+$request = $event->getRequest();
+if (!$configuration = $request->attributes->get('_cache')) {
+return;
+}
+$response = new Response();
+$lastModifiedDate ='';
+if ($configuration->getLastModified()) {
+$lastModifiedDate = $this->getExpressionLanguage()->evaluate($configuration->getLastModified(), $request->attributes->all());
+$response->setLastModified($lastModifiedDate);
+}
+$etag ='';
+if ($configuration->getETag()) {
+$etag = hash('sha256', $this->getExpressionLanguage()->evaluate($configuration->getETag(), $request->attributes->all()));
+$response->setETag($etag);
+}
+if ($response->isNotModified($request)) {
+$event->setController(function () use ($response) {
+return $response;
+});
+} else {
+if ($etag) {
+$this->etags[$request] = $etag;
+}
+if ($lastModifiedDate) {
+$this->lastModifiedDates[$request] = $lastModifiedDate;
+}
+}
+}
+public function onKernelResponse(FilterResponseEvent $event)
+{
+$request = $event->getRequest();
+if (!$configuration = $request->attributes->get('_cache')) {
+return;
+}
+$response = $event->getResponse();
+if (!in_array($response->getStatusCode(), array(200, 203, 300, 301, 302, 304, 404, 410))) {
+return;
+}
+if (null !== $age = $configuration->getSMaxAge()) {
+if (!is_numeric($age)) {
+$now = microtime(true);
+$age = ceil(strtotime($configuration->getSMaxAge(), $now) - $now);
+}
+$response->setSharedMaxAge($age);
+}
+if (null !== $age = $configuration->getMaxAge()) {
+if (!is_numeric($age)) {
+$now = microtime(true);
+$age = ceil(strtotime($configuration->getMaxAge(), $now) - $now);
+}
+$response->setMaxAge($age);
+}
+if (null !== $configuration->getExpires()) {
+$date = \DateTime::createFromFormat('U', strtotime($configuration->getExpires()), new \DateTimeZone('UTC'));
+$response->setExpires($date);
+}
+if (null !== $configuration->getVary()) {
+$response->setVary($configuration->getVary());
+}
+if ($configuration->isPublic()) {
+$response->setPublic();
+}
+if ($configuration->isPrivate()) {
+$response->setPrivate();
+}
+if (isset($this->lastModifiedDates[$request])) {
+$response->setLastModified($this->lastModifiedDates[$request]);
+unset($this->lastModifiedDates[$request]);
+}
+if (isset($this->etags[$request])) {
+$response->setETag($this->etags[$request]);
+unset($this->etags[$request]);
+}
+$event->setResponse($response);
+}
+public static function getSubscribedEvents()
+{
+return array(
+KernelEvents::CONTROLLER =>'onKernelController',
+KernelEvents::RESPONSE =>'onKernelResponse',
+);
+}
+private function getExpressionLanguage()
+{
+if (null === $this->expressionLanguage) {
+if (!class_exists('Symfony\Component\ExpressionLanguage\ExpressionLanguage')) {
+throw new \RuntimeException('Unable to use expressions as the Symfony ExpressionLanguage component is not installed.');
+}
+$this->expressionLanguage = new ExpressionLanguage();
+}
+return $this->expressionLanguage;
+}
+}
+}
+namespace Sensio\Bundle\FrameworkExtraBundle\EventListener
+{
+use Sensio\Bundle\FrameworkExtraBundle\Security\ExpressionLanguage;
+use Symfony\Component\HttpKernel\Event\FilterControllerEvent;
+use Symfony\Component\HttpKernel\KernelEvents;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+use Symfony\Component\Security\Core\Authentication\AuthenticationTrustResolverInterface;
+use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorageInterface;
+use Symfony\Component\Security\Core\Authorization\AuthorizationCheckerInterface;
+use Symfony\Component\Security\Core\SecurityContextInterface;
+use Symfony\Component\Security\Core\Exception\AccessDeniedException;
+use Symfony\Component\Security\Core\Role\RoleHierarchyInterface;
+class SecurityListener implements EventSubscriberInterface
+{
+private $tokenStorage;
+private $authChecker;
+private $language;
+private $trustResolver;
+private $roleHierarchy;
+public function __construct(SecurityContextInterface $securityContext = null, ExpressionLanguage $language = null, AuthenticationTrustResolverInterface $trustResolver = null, RoleHierarchyInterface $roleHierarchy = null, TokenStorageInterface $tokenStorage = null, AuthorizationCheckerInterface $authChecker = null)
+{
+$this->tokenStorage = $tokenStorage ?: $securityContext;
+$this->authChecker = $authChecker ?: $securityContext;
+$this->language = $language;
+$this->trustResolver = $trustResolver;
+$this->roleHierarchy = $roleHierarchy;
+}
+public function onKernelController(FilterControllerEvent $event)
+{
+$request = $event->getRequest();
+if (!$configuration = $request->attributes->get('_security')) {
+return;
+}
+if (null === $this->tokenStorage || null === $this->trustResolver) {
+throw new \LogicException('To use the @Security tag, you need to install the Symfony Security bundle.');
+}
+if (null === $this->tokenStorage->getToken()) {
+throw new \LogicException('To use the @Security tag, your controller needs to be behind a firewall.');
+}
+if (null === $this->language) {
+throw new \LogicException('To use the @Security tag, you need to use the Security component 2.4 or newer and to install the ExpressionLanguage component.');
+}
+if (!$this->language->evaluate($configuration->getExpression(), $this->getVariables($request))) {
+throw new AccessDeniedException(sprintf('Expression "%s" denied access.', $configuration->getExpression()));
+}
+}
+private function getVariables(Request $request)
+{
+$token = $this->tokenStorage->getToken();
+if (null !== $this->roleHierarchy) {
+$roles = $this->roleHierarchy->getReachableRoles($token->getRoles());
+} else {
+$roles = $token->getRoles();
+}
+$variables = array('token'=> $token,'user'=> $token->getUser(),'object'=> $request,'request'=> $request,'roles'=> array_map(function ($role) { return $role->getRole(); }, $roles),'trust_resolver'=> $this->trustResolver,'auth_checker'=> $this->authChecker,
+);
+return array_merge($request->attributes->all(), $variables);
+}
+public static function getSubscribedEvents()
+{
+return array(KernelEvents::CONTROLLER =>'onKernelController');
+}
+}
+}
+namespace Sensio\Bundle\FrameworkExtraBundle\Configuration
+{
+interface ConfigurationInterface
+{
+public function getAliasName();
+public function allowArray();
+}
+}
+namespace Sensio\Bundle\FrameworkExtraBundle\Configuration
+{
+abstract class ConfigurationAnnotation implements ConfigurationInterface
+{
+public function __construct(array $values)
+{
+foreach ($values as $k => $v) {
+if (!method_exists($this, $name ='set'.$k)) {
+throw new \RuntimeException(sprintf('Unknown key "%s" for annotation "@%s".', $k, get_class($this)));
+}
+$this->$name($v);
+}
+}
+}
+}
 namespace Symfony\Component\Form
 {
 use Symfony\Component\OptionsResolver\OptionsResolverInterface;
@@ -6024,7 +6789,9 @@ if ($options['transform']) {
 $builder->addModelTransformer(new BooleanTypeToBooleanTransformer());
 }
 if ($options['catalogue'] !=='SonataCoreBundle') {
-@trigger_error('Option "catalogue" is deprecated since SonataCoreBundle 2.3.10 and will be removed in 4.0. Use option "translation_domain" instead.', E_USER_DEPRECATED);
+@trigger_error('Option "catalogue" is deprecated since SonataCoreBundle 2.3.10 and will be removed in 4.0.'.' Use option "translation_domain" instead.',
+E_USER_DEPRECATED
+);
 }
 }
 public function setDefaultOptions(OptionsResolverInterface $resolver)
@@ -6313,6 +7080,17 @@ public function configureOptions(OptionsResolver $resolver)
 {
 $resolver->setDefaults(array('keys'=> array(),
 ));
+if (!method_exists('Symfony\Component\OptionsResolver\OptionsResolver','setDefault')) {
+return;
+}
+$resolver->setAllowedValues('keys', function ($value) {
+foreach ($value as $subValue) {
+if (!$subValue instanceof FormBuilderInterface && (!is_array($subValue) || count($subValue) !== 3)) {
+return false;
+}
+}
+return true;
+});
 }
 public function getBlockPrefix()
 {
@@ -6337,7 +7115,9 @@ class TranslatableChoiceType extends AbstractType
 protected $translator;
 public function __construct(TranslatorInterface $translator)
 {
-@trigger_error('Form type "sonata_type_translatable_choice" is deprecated since SonataCoreBundle 2.2.0 and will be removed in 4.0. Use form type "choice" with "translation_domain" option instead.', E_USER_DEPRECATED);
+@trigger_error('Form type "sonata_type_translatable_choice" is deprecated since SonataCoreBundle 2.2.0 and will be'.' removed in 4.0. Use form type "choice" with "translation_domain" option instead.',
+E_USER_DEPRECATED
+);
 $this->translator = $translator;
 }
 public function setDefaultOptions(OptionsResolverInterface $resolver)
@@ -8145,8 +8925,12 @@ $this->datagrid->getPager()->setMaxPageLinks($this->maxPageLinks);
 $mapper = new DatagridMapper($this->getDatagridBuilder(), $this->datagrid, $this);
 $this->configureDatagridFilters($mapper);
 if ($this->isChild() && $this->getParentAssociationMapping() && !$mapper->has($this->getParentAssociationMapping())) {
-$mapper->add($this->getParentAssociationMapping(), null, array('show_filter'=> false,'label'=> false,'field_type'=>'sonata_type_model_hidden','field_options'=> array('model_manager'=> $this->getModelManager(),
-),'operator_type'=>'hidden',
+$modelHiddenType = method_exists('Symfony\Component\Form\AbstractType','getBlockPrefix')
+?'Sonata\AdminBundle\Form\Type\ModelHiddenType':'sonata_type_model_hidden';
+$hiddenType = method_exists('Symfony\Component\Form\AbstractType','getBlockPrefix')
+?'Symfony\Component\Form\Extension\Core\Type\HiddenType':'hidden';
+$mapper->add($this->getParentAssociationMapping(), null, array('show_filter'=> false,'label'=> false,'field_type'=> $modelHiddenType,'field_options'=> array('model_manager'=> $this->getModelManager(),
+),'operator_type'=> $hiddenType,
 ), null, null, array('admin_code'=> $this->getParent()->getCode(),
 ));
 }
@@ -8288,13 +9072,21 @@ return $subClass;
 public function getBatchActions()
 {
 $actions = array();
-if ($this->hasRoute('delete') && $this->isGranted('DELETE')) {
+if ($this->hasRoute('delete') && $this->hasAccess('delete')) {
 $actions['delete'] = array('label'=>'action_delete','translation_domain'=>'SonataAdminBundle','ask_confirmation'=> true, );
 }
 $actions = $this->configureBatchActions($actions);
 foreach ($this->getExtensions() as $extension) {
 if (method_exists($extension,'configureBatchActions')) {
 $actions = $extension->configureBatchActions($this, $actions);
+}
+}
+foreach ($actions as $name => &$action) {
+if (!array_key_exists('label', $action)) {
+$action['label'] = $this->getTranslationLabel($name,'batch','label');
+}
+if (!array_key_exists('translation_domain', $action)) {
+$action['translation_domain'] = $this->getTranslationDomain();
 }
 }
 return $actions;
@@ -9248,11 +10040,11 @@ return $list;
 public function getDashboardActions()
 {
 $actions = array();
-if ($this->hasRoute('create') && $this->isGranted('CREATE')) {
+if ($this->hasRoute('create') && $this->hasAccess('create')) {
 $actions['create'] = array('label'=>'link_add','translation_domain'=>'SonataAdminBundle','template'=> $this->getTemplate('action_create'),'url'=> $this->generateUrl('create'),'icon'=>'plus-circle',
 );
 }
-if ($this->hasRoute('list') && $this->isGranted('LIST')) {
+if ($this->hasRoute('list') && $this->hasAccess('list')) {
 $actions['list'] = array('label'=>'link_list','translation_domain'=>'SonataAdminBundle','url'=> $this->generateUrl('list'),'icon'=>'list',
 );
 }
@@ -10161,7 +10953,7 @@ throw new \RuntimeException('Invalid format for the Pool::adminClass property');
 if (count($this->adminClasses[$class]) > 1) {
 throw new \RuntimeException(sprintf('Unable to find a valid admin for the class: %s, there are too many registered: %s',
 $class,
-implode(',', $this->adminClasses[$class])
+implode(', ', $this->adminClasses[$class])
 ));
 }
 return $this->getInstance($this->adminClasses[$class][0]);
@@ -10673,7 +11465,7 @@ public function addIdentifier($name, $type = null, array $fieldDescriptionOption
 {
 $fieldDescriptionOptions['identifier'] = true;
 if (!isset($fieldDescriptionOptions['route']['name'])) {
-$routeName = ($this->admin->isGranted('EDIT') && $this->admin->hasRoute('edit')) ?'edit':'show';
+$routeName = ($this->admin->hasAccess('edit') && $this->admin->hasRoute('edit')) ?'edit':'show';
 $fieldDescriptionOptions['route']['name'] = $routeName;
 }
 if (!isset($fieldDescriptionOptions['route']['parameters'])) {
@@ -11855,9 +12647,9 @@ $fieldName = $name->getName();
 } else {
 $fieldName = $name;
 }
-if (!$name instanceof FormBuilderInterface && strpos($fieldName,'.') !== false && !isset($options['property_path'])) {
+if (!$name instanceof FormBuilderInterface && !isset($options['property_path'])) {
 $options['property_path'] = $fieldName;
-$fieldName = str_replace('.','__', $fieldName);
+$fieldName = $this->sanitizeFieldName($fieldName);
 }
 if ($type ==='collection'|| $type ==='Symfony\Component\Form\Extension\Core\Type\CollectionType') {
 $type ='sonata_type_native_collection';
@@ -11907,10 +12699,12 @@ return $this;
 }
 public function get($name)
 {
+$name = $this->sanitizeFieldName($name);
 return $this->formBuilder->get($name);
 }
 public function has($key)
 {
+$key = $this->sanitizeFieldName($key);
 return $this->formBuilder->has($key);
 }
 final public function keys()
@@ -11919,6 +12713,7 @@ return array_keys($this->formBuilder->all());
 }
 public function remove($key)
 {
+$key = $this->sanitizeFieldName($key);
 $this->admin->removeFormFieldDescription($key);
 $this->admin->removeFieldFromFormGroup($key);
 $this->formBuilder->remove($key);
@@ -11970,6 +12765,10 @@ $this->admin->getFormFieldDescription($name)->setHelp($help);
 }
 return $this;
 }
+protected function sanitizeFieldName($fieldName)
+{
+return str_replace(array('__','.'), array('____','__'), $fieldName);
+}
 protected function getGroups()
 {
 return $this->admin->getFormGroups();
@@ -12011,7 +12810,7 @@ $admin = clone $this->getAdmin($options);
 if ($admin->hasParentFieldDescription()) {
 $admin->getParentFieldDescription()->setAssociationAdmin($admin);
 }
-if ($options['delete'] && $admin->isGranted('DELETE')) {
+if ($options['delete'] && $admin->hasAccess('delete')) {
 if (!array_key_exists('translation_domain', $options['delete_options']['type_options'])) {
 $options['delete_options']['type_options']['translation_domain'] = $admin->getTranslationDomain();
 }
@@ -12033,7 +12832,7 @@ $subject = $subjectCollection->get(trim($options['property_path'],'[]'));
 } else {
 $subject = $p->getValue(
 $parentSubject,
-$this->getFieldDescription($options)->getFieldName().$options['property_path']
+$options['property_path']
 );
 }
 $builder->setData($subject);
@@ -12597,6 +13396,9 @@ $options['choices'],
 $propertyAccessor
 );
 };
+if (method_exists('Symfony\Component\Form\FormTypeInterface','setDefaultOptions')) {
+$options['choices_as_values'] = true;
+}
 } else {
 $options['choice_list'] = function (Options $options, $previousValue) use ($propertyAccessor) {
 if ($previousValue && count($choices = $previousValue->getChoices())) {
@@ -13767,7 +14569,7 @@ throw new \RuntimeException(sprintf('Duplicate field name "%s" in show mapper. N
 } else {
 throw new \RuntimeException('invalid state');
 }
-if (!$fieldDescription->getLabel()) {
+if (!$fieldDescription->getLabel() && false !== $fieldDescription->getOption('label')) {
 $fieldDescription->setOption('label', $this->admin->getLabelTranslatorStrategy()->getLabel($fieldDescription->getName(),'show','label'));
 }
 $fieldDescription->setOption('safe', $fieldDescription->getOption('safe', false));
@@ -14129,7 +14931,7 @@ $xEditableChoices = $choices;
 foreach ($choices as $value => $text) {
 if ($catalogue) {
 if (null !== $this->translator) {
-$this->translator->trans($text, array(), $catalogue);
+$text = $this->translator->trans($text, array(), $catalogue);
 } elseif (method_exists($fieldDescription->getAdmin(),'trans')) {
 $text = $fieldDescription->getAdmin()->trans($text, array(), $catalogue);
 }

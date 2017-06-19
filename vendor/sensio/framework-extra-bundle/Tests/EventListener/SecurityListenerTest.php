@@ -23,7 +23,6 @@ class SecurityListenerTest extends \PHPUnit_Framework_TestCase
 {
     /**
      * @expectedException \Symfony\Component\Security\Core\Exception\AccessDeniedException
-     * @group legacy
      */
     public function testLegacyAccessDenied()
     {
@@ -33,21 +32,21 @@ class SecurityListenerTest extends \PHPUnit_Framework_TestCase
 
         $this->iniSet('error_reporting', -1 & ~E_USER_DEPRECATED);
 
-        $token = $this->getMockBuilder('Symfony\Component\Security\Core\Authentication\Token\TokenInterface')->getMock();
+        $token = $this->getMock('Symfony\Component\Security\Core\Authentication\Token\TokenInterface');
         $token->expects($this->once())->method('getRoles')->will($this->returnValue(array()));
 
-        $securityContext = $this->getMockBuilder('Symfony\Component\Security\Core\SecurityContextInterface')->getMock();
+        $securityContext = $this->getMock('Symfony\Component\Security\Core\SecurityContextInterface');
         $securityContext->expects($this->once())->method('isGranted')->will($this->throwException(new AccessDeniedException()));
         $securityContext->expects($this->exactly(2))->method('getToken')->will($this->returnValue($token));
 
-        $trustResolver = $this->getMockBuilder('Symfony\Component\Security\Core\Authentication\AuthenticationTrustResolverInterface')->getMock();
+        $trustResolver = $this->getMock('Symfony\Component\Security\Core\Authentication\AuthenticationTrustResolverInterface');
 
         $language = new ExpressionLanguage();
 
         $listener = new SecurityListener($securityContext, $language, $trustResolver);
         $request = $this->createRequest(new Security(array('expression' => 'has_role("ROLE_ADMIN") or is_granted("FOO")')));
 
-        $event = new FilterControllerEvent($this->getMockBuilder('Symfony\Component\HttpKernel\HttpKernelInterface')->getMock(), function () { return new Response(); }, $request, null);
+        $event = new FilterControllerEvent($this->getMock('Symfony\Component\HttpKernel\HttpKernelInterface'), function () { return new Response(); }, $request, null);
 
         $listener->onKernelController($event);
     }
@@ -61,23 +60,23 @@ class SecurityListenerTest extends \PHPUnit_Framework_TestCase
             $this->markTestSkipped();
         }
 
-        $token = $this->getMockBuilder('Symfony\Component\Security\Core\Authentication\Token\TokenInterface')->getMock();
+        $token = $this->getMock('Symfony\Component\Security\Core\Authentication\Token\TokenInterface');
         $token->expects($this->once())->method('getRoles')->will($this->returnValue(array()));
 
-        $tokenStorage = $this->getMockBuilder('Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorageInterface')->getMock();
+        $tokenStorage = $this->getMock('Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorageInterface');
         $tokenStorage->expects($this->exactly(2))->method('getToken')->will($this->returnValue($token));
 
-        $authChecker = $this->getMockBuilder('Symfony\Component\Security\Core\Authorization\AuthorizationCheckerInterface')->getMock();
+        $authChecker = $this->getMock('Symfony\Component\Security\Core\Authorization\AuthorizationCheckerInterface');
         $authChecker->expects($this->once())->method('isGranted')->will($this->throwException(new AccessDeniedException()));
 
-        $trustResolver = $this->getMockBuilder('Symfony\Component\Security\Core\Authentication\AuthenticationTrustResolverInterface')->getMock();
+        $trustResolver = $this->getMock('Symfony\Component\Security\Core\Authentication\AuthenticationTrustResolverInterface');
 
         $language = new ExpressionLanguage();
 
         $listener = new SecurityListener(null, $language, $trustResolver, null, $tokenStorage, $authChecker);
         $request = $this->createRequest(new Security(array('expression' => 'has_role("ROLE_ADMIN") or is_granted("FOO")')));
 
-        $event = new FilterControllerEvent($this->getMockBuilder('Symfony\Component\HttpKernel\HttpKernelInterface')->getMock(), function () { return new Response(); }, $request, null);
+        $event = new FilterControllerEvent($this->getMock('Symfony\Component\HttpKernel\HttpKernelInterface'), function () { return new Response(); }, $request, null);
 
         $listener->onKernelController($event);
     }
@@ -91,6 +90,6 @@ class SecurityListenerTest extends \PHPUnit_Framework_TestCase
 
     private function getKernel()
     {
-        return $this->getMockBuilder('Symfony\Component\HttpKernel\HttpKernelInterface')->getMock();
+        return $this->getMock('Symfony\Component\HttpKernel\HttpKernelInterface');
     }
 }

@@ -23,7 +23,9 @@ file that was distributed with this source code.
                             style="display:none;"
                         {% endif %}
                     >
-                        {{ nested_field.vars.label|trans({}, nested_field.vars.translation_domain) }}
+                        {{ nested_field.vars.label|trans({}, nested_field.vars['sonata_admin'].admin.translationDomain
+                            |default(nested_field.vars.translation_domain)
+                        ) }}
                     </th>
                 {% endif %}
             {% endfor %}
@@ -48,7 +50,7 @@ file that was distributed with this source code.
                             {% set dummy = nested_group_field.setrendered %}
                         {% else %}
                             {% if field_name == '_delete' %}
-                                {{ form_widget(nested_field, {'label_render': false}) }}
+                                {{ form_widget(nested_field, { label: false }) }}
                             {% else %}
                                 {{ form_widget(nested_field) }}
                             {% endif %}

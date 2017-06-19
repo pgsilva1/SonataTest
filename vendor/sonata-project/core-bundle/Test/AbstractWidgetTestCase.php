@@ -58,13 +58,14 @@ abstract class AbstractWidgetTestCase extends TypeTestCase
             'Symfony\Component\Form\Extension\Csrf\CsrfProvider\CsrfProviderInterface',
         ), 'interface_exists');
 
-        $this->renderer = new TwigRenderer($this->getRenderingEngine(), $this->getMock(current($csrfProviderClasses)));
-
-        $this->extension = new FormExtension($this->renderer);
-        $environment = $this->getEnvironment();
-
         // TODO: remove the condition when dropping symfony/twig-bundle < 3.2
         if (method_exists('Symfony\Bridge\Twig\AppVariable', 'getToken')) {
+            $this->extension = new FormExtension();
+            $environment = $this->getEnvironment();
+            $this->renderer = new TwigRenderer(
+                $this->getRenderingEngine($environment),
+                $this->createMock(current($csrfProviderClasses))
+            );
             $runtimeLoader = $this
                 ->getMockBuilder('Twig_RuntimeLoaderInterface')
                 ->getMock();
@@ -75,7 +76,15 @@ abstract class AbstractWidgetTestCase extends TypeTestCase
                 ->will($this->returnValue($this->renderer));
 
             $environment->addRuntimeLoader($runtimeLoader);
+        } else {
+            $this->renderer = new TwigRenderer(
+                $this->getRenderingEngine(),
+                $this->createMock(current($csrfProviderClasses))
+            );
+            $this->extension = new FormExtension($this->renderer);
+            $environment = $this->getEnvironment();
         }
+
         $this->extension->initRuntime($environment);
     }
 
@@ -125,13 +134,22 @@ abstract class AbstractWidgetTestCase extends TypeTestCase
     }
 
     /**
+     * NEXT_MAJOR: uncomment and use the $environment argument.
+     *
      * @return TwigRendererEngineInterface
      */
-    protected function getRenderingEngine()
+    protected function getRenderingEngine(/* \Twig_Environment $environment = null */)
     {
-        return new TwigRendererEngine(array(
-            'form_div_layout.html.twig',
-        ));
+        $environment = current(func_get_args());
+        if (is_null($environment) && method_exists('Symfony\Bridge\Twig\AppVariable', 'getToken')) {
+            @trigger_error(
+                'Not passing a \Twig_Environment instance to '.__METHOD__.
+                ' is deprecated since 3.3 and will not be possible in 4.0',
+                E_USER_DEPRECATED
+            );
+        }
+
+        return new TwigRendererEngine(array('form_div_layout.html.twig'), $environment);
     }
 
     /**
@@ -171,5 +189,21 @@ abstract class AbstractWidgetTestCase extends TypeTestCase
         return preg_replace_callback('~<([A-Z0-9]+) \K(.*?)>~i', function ($m) {
             return preg_replace('~\s*~', '', $m[0]);
         }, $html);
+    }
+
+    /**
+     * NEXT_MAJOR: Remove this method when dropping support for < PHPUnit 5.4.
+     *
+     * @param string $class
+     *
+     * @return \PHPUnit_Framework_MockObject_MockObject
+     */
+    protected function createMock($class)
+    {
+        if (is_callable('parent::createMock')) {
+            return parent::createMock($class);
+        }
+
+        return $this->getMock($class);
     }
 }

@@ -21,9 +21,7 @@ use Symfony\Component\Form\FormEvents;
  * will set false value to '0' instead of null which will end up
  * returning true value when the form is bind.
  *
- * Class FixCheckboxDataListener
- *
- * @author  Sylvain Rascar <rascar.sylvain@gmail.com>
+ * @author Sylvain Rascar <rascar.sylvain@gmail.com>
  */
 class FixCheckboxDataListener implements EventSubscriberInterface
 {
@@ -32,6 +30,7 @@ class FixCheckboxDataListener implements EventSubscriberInterface
      */
     public static function getSubscribedEvents()
     {
+        // NEXT_MAJOR: change `preBind` to `preSubmit`
         return array(FormEvents::PRE_SUBMIT => 'preBind');
     }
 
@@ -47,7 +46,11 @@ class FixCheckboxDataListener implements EventSubscriberInterface
     {
         // BC prevention for class extending this one.
         if (get_called_class() !== 'Sonata\CoreBundle\Form\EventListener\FixCheckboxDataListener') {
-            @trigger_error('The '.__METHOD__.' is deprecated since 2.3 and will be renamed in 4.0. Use '.__CLASS__.'::preSubmit instead.', E_USER_DEPRECATED);
+            @trigger_error(
+                __METHOD__.' is deprecated since 2.3 and will be renamed in 4.0.'
+                .' Use '.__CLASS__.'::preSubmit instead.',
+                E_USER_DEPRECATED
+            );
         }
 
         $this->preSubmit($event);
